@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:meshtastic_flutter/meshtastic_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -94,6 +95,17 @@ class MeshtasticService extends ChangeNotifier {
   int? _savedGatewayNodeId;
   int? get savedGatewayNodeId => _savedGatewayNodeId;
 
+  /// Safe notifyListeners that avoids calling during widget build phase
+  void _safeNotify() {
+    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _safeNotify();
+      });
+    } else {
+      _safeNotify();
+    }
+  }
+
   // Photo quality: false = fast (160x120), true = detailed (200x200)
   bool _detailedQuality = false;
   bool get detailedQuality => _detailedQuality;
@@ -101,7 +113,7 @@ class MeshtasticService extends ChangeNotifier {
   void _updateStatus(ConnectionStatus newStatus, String message) {
     _status = newStatus;
     _statusMessage = message;
-    notifyListeners();
+    _safeNotify();
   }
 
   // --- Persistence ---
@@ -138,21 +150,21 @@ class MeshtasticService extends ChangeNotifier {
       _savedGatewayNodeId = 0x9ea29bc4;
     }
     _detailedQuality = prefs.getBool(_photoQualityKey) ?? false;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> saveGatewayNodeId(int nodeId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_gatewayNodeIdKey, nodeId);
     _savedGatewayNodeId = nodeId;
-    notifyListeners();
+    _safeNotify();
   }
 
   Future<void> setDetailedQuality(bool detailed) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_photoQualityKey, detailed);
     _detailedQuality = detailed;
-    notifyListeners();
+    _safeNotify();
   }
 
   // --- Connection ---
@@ -398,7 +410,7 @@ class MeshtasticService extends ChangeNotifier {
     }
     _messageController.add(message);
     _saveMessageHistory();
-    notifyListeners();
+    _safeNotify();
   }
 
   void _addSystemMessage(String text) {
@@ -529,7 +541,7 @@ class MeshtasticService extends ChangeNotifier {
         nodeName: nodeName ?? '!${nodeId.toRadixString(16).padLeft(8, '0')}',
       );
     }
-    notifyListeners();
+    _safeNotify();
   }
 
   // --- Image Protocol Handlers ---
@@ -542,7 +554,7 @@ class MeshtasticService extends ChangeNotifier {
     if (_activeTransmission == null || _activeTransmission!.imageId != imageId) return;
 
     _activeTransmission!.chunksConfirmed++;
-    notifyListeners();
+    _safeNotify();
   }
 
   void _handleImageRetry(String text) {
@@ -556,7 +568,7 @@ class MeshtasticService extends ChangeNotifier {
     _activeTransmission!.missingChunks = missing;
     _activeTransmission!.state = ImageTransmissionState.retransmitting;
     _activeTransmission!.retryRound++;
-    notifyListeners();
+    _safeNotify();
 
     if (_activeTransmission!.retryRound <= 4) {
       _retransmitChunks();
@@ -564,7 +576,7 @@ class MeshtasticService extends ChangeNotifier {
       _activeTransmission!.state = ImageTransmissionState.error;
       _activeTransmission!.errorMessage = 'Maximo de reintentos alcanzado';
       _addImageErrorMessage('No se pudo enviar la foto despues de 4 reintentos');
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -578,7 +590,7 @@ class MeshtasticService extends ChangeNotifier {
     _activeTransmission!.state = ImageTransmissionState.waitingResult;
     _cancelImageTimeout();
     _startResultTimeout();
-    notifyListeners();
+    _safeNotify();
 
     _addMessage(ChatMessage(
       id: 'img_ok_${DateTime.now().millisecondsSinceEpoch}',
@@ -652,7 +664,7 @@ class MeshtasticService extends ChangeNotifier {
         _startResultRetryTimer(imageId, totalParts);
       }
 
-      notifyListeners();
+      _safeNotify();
     }
   }
 
@@ -686,7 +698,7 @@ class MeshtasticService extends ChangeNotifier {
           imageId: imageId,
         ));
         Vibration.vibrate(duration: 500);
-        notifyListeners();
+        _safeNotify();
       }
       return;
     }
@@ -734,7 +746,7 @@ class MeshtasticService extends ChangeNotifier {
       _activeTransmission!.errorMessage = errorMsg;
       _cancelImageTimeout();
       _resultRetryTimer?.cancel();
-      notifyListeners();
+      _safeNotify();
     } else {
       // Error para imagen que no es la activa - ignorar
       debugPrint('[IMG] Ignorando error para imagen no activa: $imageId');
@@ -764,7 +776,7 @@ class MeshtasticService extends ChangeNotifier {
     _activeTransmission!.state = ImageTransmissionState.sending;
     _resultRetryTimer?.cancel();
     _resultRetryCount = 0;
-    notifyListeners();
+    _safeNotify();
 
     final gatewayId = _savedGatewayNodeId!;
 
@@ -782,7 +794,7 @@ class MeshtasticService extends ChangeNotifier {
       final chunkMsg = 'IMG|${transmission.imageId}|$i|${transmission.chunks[i]}';
       await sendDirectMessage(chunkMsg, gatewayId);
       _activeTransmission!.chunksSent = i + 1;
-      notifyListeners();
+      _safeNotify();
 
       // Update progress message
       _updateImageProgressInChat();
@@ -795,7 +807,7 @@ class MeshtasticService extends ChangeNotifier {
     await sendDirectMessage(endMsg, gatewayId);
 
     _activeTransmission!.state = ImageTransmissionState.waitingAck;
-    notifyListeners();
+    _safeNotify();
 
     // Timeout: 60s without IMG_OK -> resend IMG_END
     _startAckTimeout();
@@ -820,7 +832,7 @@ class MeshtasticService extends ChangeNotifier {
     final endMsg = 'IMG_END|${_activeTransmission!.imageId}|${_activeTransmission!.chunks.length}|${_activeTransmission!.checksum}';
     await sendDirectMessage(endMsg, gatewayId);
     _activeTransmission!.state = ImageTransmissionState.waitingAck;
-    notifyListeners();
+    _safeNotify();
   }
 
   void cancelImageTransmission() {
@@ -829,7 +841,7 @@ class MeshtasticService extends ChangeNotifier {
       _cancelImageTimeout();
       _resultRetryTimer?.cancel();
       _resultRetryCount = 0;
-      notifyListeners();
+      _safeNotify();
       _addSystemMessage('Envio de foto cancelado');
     }
   }
@@ -853,7 +865,7 @@ class MeshtasticService extends ChangeNotifier {
               _activeTransmission!.state == ImageTransmissionState.waitingAck) {
             _activeTransmission!.state = ImageTransmissionState.error;
             _activeTransmission!.errorMessage = 'Sin respuesta del gateway';
-            notifyListeners();
+            _safeNotify();
             _addImageErrorMessage('No se recibio confirmacion del gateway');
           }
         });
@@ -887,7 +899,7 @@ class MeshtasticService extends ChangeNotifier {
         }
         _resultRetryTimer?.cancel();
         _resultRetryCount = 0;
-        notifyListeners();
+        _safeNotify();
       }
     });
   }
@@ -919,7 +931,7 @@ class MeshtasticService extends ChangeNotifier {
           ));
         } catch (_) {}
       }
-      notifyListeners();
+      _safeNotify();
     } catch (_) {}
   }
 

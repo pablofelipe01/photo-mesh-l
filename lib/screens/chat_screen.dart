@@ -186,7 +186,8 @@ class _ChatScreenState extends State<ChatScreen> {
                 top: 24,
                 bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
               ),
-              child: Column(
+              child: SingleChildScrollView(
+                child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
@@ -321,6 +322,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     ],
                   ),
                 ],
+              ),
               ),
             ),
           );
