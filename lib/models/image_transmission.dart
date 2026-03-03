@@ -52,7 +52,7 @@ class ImageTransmission {
       case ImageTransmissionState.waitingAck:
         return 'Esperando confirmacion...';
       case ImageTransmissionState.retransmitting:
-        return 'Reenviando ${missingChunks.length} partes (intento $retryRound/2)...';
+        return 'Reenviando ${missingChunks.length} partes (intento $retryRound/4)...';
       case ImageTransmissionState.waitingResult:
         return 'Foto recibida. Analizando...';
       case ImageTransmissionState.completed:

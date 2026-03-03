@@ -26,6 +26,7 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<ChatMessage>? _messageSubscription;
   int _currentByteCount = 0;
   bool _isSending = false;
+  int? _selectedDestinationId; // null = broadcast
 
   MeshtasticService get _service => widget.service;
 
@@ -78,7 +79,7 @@ class _ChatScreenState extends State<ChatScreen> {
     setState(() => _isSending = true);
     _textController.clear();
 
-    await _service.sendChatMessage(text);
+    await _service.sendChatMessage(text, destinationId: _selectedDestinationId);
 
     setState(() => _isSending = false);
     _scrollToBottom();
@@ -164,110 +165,166 @@ class _ChatScreenState extends State<ChatScreen> {
     final seconds = (estimatedTime % 60).ceil();
     final timeStr = minutes > 0 ? '${minutes}m ${seconds}s' : '${seconds}s';
 
+    final contextController = TextEditingController();
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(2),
-                ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheetState) {
+          final contextBytes = MeshtasticService.getUtf8ByteLength(contextController.text);
+          final contextOverLimit = contextBytes > maxMessageBytes;
+
+          return SafeArea(
+            child: Padding(
+              padding: EdgeInsets.only(
+                left: 24,
+                right: 24,
+                top: 24,
+                bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
               ),
-              const SizedBox(height: 16),
-              Text(
-                'Enviar foto - $tipo',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 16),
-              // Info cards
-              Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Column(
-                  children: [
-                    _infoRow(Icons.straighten, 'Tamano comprimido', '$sizeKb KB'),
-                    const Divider(),
-                    _infoRow(Icons.message, 'Mensajes a enviar', '${transmission.chunks.length}'),
-                    const Divider(),
-                    _infoRow(Icons.timer, 'Tiempo estimado', '~$timeStr'),
-                    const Divider(),
-                    _infoRow(Icons.high_quality,
-                        'Calidad',
-                        _service.detailedQuality ? 'Detallada (200x200)' : 'Rapida (160x120)'),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.orange.shade50,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.orange.shade200),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
-                    const SizedBox(width: 8),
-                    const Expanded(
-                      child: Text(
-                        'No minimices la app durante el envio',
-                        style: TextStyle(fontSize: 13),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              Row(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _capturePhoto(tipo);
-                      },
-                      icon: const Icon(Icons.refresh),
-                      label: const Text('REPETIR'),
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                      ),
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade300,
+                      borderRadius: BorderRadius.circular(2),
                     ),
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: () {
-                        Navigator.pop(ctx);
-                        _startSending(transmission);
-                      },
-                      icon: const Icon(Icons.send),
-                      label: const Text('ENVIAR'),
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor: Colors.green.shade600,
+                  const SizedBox(height: 16),
+                  Text(
+                    'Enviar foto - $tipo',
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 16),
+                  // Context field
+                  TextField(
+                    controller: contextController,
+                    maxLines: 2,
+                    minLines: 1,
+                    onChanged: (_) => setSheetState(() {}),
+                    decoration: InputDecoration(
+                      hintText: 'Describe lo que ves (opcional)...',
+                      filled: true,
+                      fillColor: contextOverLimit ? Colors.red.shade50 : Colors.grey.shade100,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: contextOverLimit
+                            ? BorderSide(color: Colors.red.shade400)
+                            : BorderSide.none,
                       ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: contextOverLimit
+                            ? BorderSide(color: Colors.red.shade400)
+                            : BorderSide.none,
+                      ),
+                      suffixIcon: contextController.text.isNotEmpty
+                          ? Padding(
+                              padding: const EdgeInsets.only(right: 8),
+                              child: Text(
+                                '$contextBytes/$maxMessageBytes',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  color: contextOverLimit ? Colors.red : Colors.grey.shade500,
+                                ),
+                              ),
+                            )
+                          : null,
+                      suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                     ),
+                  ),
+                  const SizedBox(height: 12),
+                  // Info cards
+                  Container(
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        _infoRow(Icons.straighten, 'Tamano comprimido', '$sizeKb KB'),
+                        const Divider(),
+                        _infoRow(Icons.message, 'Mensajes a enviar', '${transmission.chunks.length}'),
+                        const Divider(),
+                        _infoRow(Icons.timer, 'Tiempo estimado', '~$timeStr'),
+                        const Divider(),
+                        _infoRow(Icons.high_quality,
+                            'Calidad',
+                            _service.detailedQuality ? 'Detallada (200x200)' : 'Rapida (160x120)'),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.shade50,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.orange.shade200),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text(
+                            'No minimices la app durante el envio',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            contextController.dispose();
+                            Navigator.pop(ctx);
+                            _capturePhoto(tipo);
+                          },
+                          icon: const Icon(Icons.refresh),
+                          label: const Text('REPETIR'),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: contextOverLimit ? null : () {
+                            final contextText = contextController.text.trim();
+                            contextController.dispose();
+                            Navigator.pop(ctx);
+                            _startSendingWithContext(transmission, contextText);
+                          },
+                          icon: const Icon(Icons.send),
+                          label: const Text('ENVIAR'),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                            backgroundColor: Colors.green.shade600,
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
-            ],
-          ),
-        ),
+            ),
+          );
+        },
       ),
     );
   }
@@ -286,7 +343,14 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 
-  void _startSending(ImageTransmission transmission) {
+  Future<void> _startSendingWithContext(ImageTransmission transmission, String contextText) async {
+    if (contextText.isNotEmpty) {
+      await _service.sendChatMessage(
+        contextText,
+        destinationId: _service.savedGatewayNodeId,
+      );
+      await Future.delayed(const Duration(milliseconds: 1500));
+    }
     _service.sendImage(transmission);
     _scrollToBottom();
   }
@@ -603,6 +667,112 @@ class _ChatScreenState extends State<ChatScreen> {
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
+  String get _destinationLabel {
+    if (_selectedDestinationId == null) return 'Todos (broadcast)';
+    final node = _service.knownNodes[_selectedDestinationId];
+    if (node != null) return node.nodeName;
+    return '!${_selectedDestinationId!.toRadixString(16).padLeft(8, '0')}';
+  }
+
+  void _showDestinationPicker() {
+    final nodes = _service.knownNodes.values.toList();
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Enviar a',
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 12),
+              ListTile(
+                leading: const Icon(Icons.groups),
+                title: const Text('Todos (broadcast)'),
+                selected: _selectedDestinationId == null,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                onTap: () {
+                  setState(() => _selectedDestinationId = null);
+                  Navigator.pop(ctx);
+                },
+              ),
+              const Divider(),
+              ...nodes.map((node) => ListTile(
+                leading: const Icon(Icons.person),
+                title: Text(node.nodeName),
+                subtitle: Text(node.nodeIdHex, style: const TextStyle(fontSize: 11)),
+                selected: _selectedDestinationId == node.nodeId,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                onTap: () {
+                  setState(() => _selectedDestinationId = node.nodeId);
+                  Navigator.pop(ctx);
+                },
+              )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDestinationBar() {
+    return GestureDetector(
+      onTap: _showDestinationPicker,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: _selectedDestinationId == null
+              ? Colors.grey.shade100
+              : Colors.blue.shade50,
+          border: Border(
+            bottom: BorderSide(color: Colors.grey.shade200),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              _selectedDestinationId == null ? Icons.groups : Icons.person,
+              size: 16,
+              color: _selectedDestinationId == null
+                  ? Colors.grey.shade600
+                  : Colors.blue.shade700,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'Para: $_destinationLabel',
+              style: TextStyle(
+                fontSize: 13,
+                color: _selectedDestinationId == null
+                    ? Colors.grey.shade600
+                    : Colors.blue.shade700,
+                fontWeight: _selectedDestinationId == null
+                    ? FontWeight.normal
+                    : FontWeight.w600,
+              ),
+            ),
+            const Spacer(),
+            Icon(Icons.arrow_drop_down, size: 20, color: Colors.grey.shade500),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildInputArea(bool isOverLimit) {
     return Container(
       decoration: BoxDecoration(
@@ -615,6 +785,7 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            _buildDestinationBar(),
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
               child: Row(
