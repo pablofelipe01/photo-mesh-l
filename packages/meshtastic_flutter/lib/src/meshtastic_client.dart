@@ -189,6 +189,7 @@ class MeshtasticClient {
       _emitConnectionState(MeshtasticConnectionState.connecting);
 
       // Disconnect from any existing device
+      _isConnecting = true;
       await disconnect();
 
       _device = device;
@@ -265,8 +266,10 @@ class MeshtasticClient {
       // Start configuration process
       await _startConfiguration();
 
+      _isConnecting = false;
       _logger.info('Successfully connected to device');
     } catch (e) {
+      _isConnecting = false;
       _logger.severe('Failed to connect to device: $e');
       _emitConnectionState(
         MeshtasticConnectionState.error,
@@ -388,7 +391,8 @@ class MeshtasticClient {
 
   /// Send a packet to the device
   Future<void> _sendPacket(MeshPacket packet) async {
-    if (_toRadioChar == null) {
+    final toChar = _toRadioChar;
+    if (toChar == null) {
       throw const ConnectionException('ToRadio characteristic not available');
     }
 
@@ -406,9 +410,9 @@ class MeshtasticClient {
 
     // Check if characteristic supports write without response
     final supportsWriteWithoutResponse =
-        _toRadioChar!.properties.writeWithoutResponse;
+        toChar.properties.writeWithoutResponse;
 
-    await _toRadioChar!.write(
+    await toChar.write(
       data,
       withoutResponse: supportsWriteWithoutResponse,
     );
@@ -420,12 +424,18 @@ class MeshtasticClient {
   Future<void> _startConfiguration() async {
     _logger.info('Starting configuration process');
 
+    final toChar = _toRadioChar;
+    if (toChar == null) {
+      _logger.warning('ToRadio characteristic is null, cannot start configuration');
+      return;
+    }
+
     // Send wantConfigId to start configuration download
     final wantConfig = ToRadio(wantConfigId: 0);
     // Check if characteristic supports write without response
     final supportsWriteWithoutResponse =
-        _toRadioChar!.properties.writeWithoutResponse;
-    await _toRadioChar!.write(
+        toChar.properties.writeWithoutResponse;
+    await toChar.write(
       wantConfig.writeToBuffer(),
       withoutResponse: supportsWriteWithoutResponse,
     );
@@ -440,7 +450,13 @@ class MeshtasticClient {
 
     while (!_configComplete) {
       try {
-        final data = await _fromRadioChar!.read();
+        final fromChar = _fromRadioChar;
+        if (fromChar == null) {
+          _logger.warning('FromRadio characteristic is null, aborting configuration read');
+          break;
+        }
+
+        final data = await fromChar.read();
         if (data.isEmpty) {
           _logger.info('Configuration complete - received empty packet');
           _configComplete = true;
@@ -564,7 +580,10 @@ class MeshtasticClient {
   Future<void> _readFromRadio() async {
     try {
       while (true) {
-        final data = await _fromRadioChar!.read();
+        final fromChar = _fromRadioChar;
+        if (fromChar == null) break;
+
+        final data = await fromChar.read();
         if (data.isEmpty) break;
 
         await _processFromRadioData(data);
@@ -577,9 +596,10 @@ class MeshtasticClient {
   /// Perform a lightweight BLE read to keep the connection alive.
   /// Call this periodically (~15s) to prevent iOS from dropping idle connections.
   Future<void> keepAlive() async {
-    if (!isConnected || _fromRadioChar == null) return;
+    final fromChar = _fromRadioChar;
+    if (!isConnected || fromChar == null) return;
     try {
-      final data = await _fromRadioChar!.read();
+      final data = await fromChar.read();
       if (data.isNotEmpty) {
         await _processFromRadioData(data);
       }
@@ -588,8 +608,12 @@ class MeshtasticClient {
     }
   }
 
+  bool _isConnecting = false;
+
   /// Handle disconnection
   void _handleDisconnection() {
+    // Ignore disconnection events during a new connection attempt
+    if (_isConnecting) return;
     _logger.info('Device disconnected');
     _emitConnectionState(MeshtasticConnectionState.disconnected);
   }
