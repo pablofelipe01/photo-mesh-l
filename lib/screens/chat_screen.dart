@@ -26,7 +26,7 @@ class _ChatScreenState extends State<ChatScreen> {
   StreamSubscription<ChatMessage>? _messageSubscription;
   int _currentByteCount = 0;
   bool _isSending = false;
-  int? _selectedDestinationId; // null = broadcast
+  int? _selectedDestinationId;
 
   MeshtasticService get _service => widget.service;
 
@@ -174,20 +174,11 @@ class _ChatScreenState extends State<ChatScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) {
-          final contextBytes = MeshtasticService.getUtf8ByteLength(contextController.text);
-          final contextOverLimit = contextBytes > maxMessageBytes;
-
-          return SafeArea(
-            child: Padding(
-              padding: EdgeInsets.only(
-                left: 24,
-                right: 24,
-                top: 24,
-                bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
-              ),
-              child: SingleChildScrollView(
-                child: Column(
+        builder: (ctx, setSheetState) => SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(24, 24, 24, 24 + MediaQuery.of(ctx).viewInsets.bottom),
+            child: SingleChildScrollView(
+              child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Container(
@@ -204,45 +195,23 @@ class _ChatScreenState extends State<ChatScreen> {
                     style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 16),
-                  // Context field
+                  // Context text field
                   TextField(
                     controller: contextController,
                     maxLines: 2,
                     minLines: 1,
-                    onChanged: (_) => setSheetState(() {}),
                     decoration: InputDecoration(
-                      hintText: 'Describe lo que ves (opcional)...',
+                      hintText: 'Contexto adicional (opcional)',
                       filled: true,
-                      fillColor: contextOverLimit ? Colors.red.shade50 : Colors.grey.shade100,
+                      fillColor: Colors.grey.shade100,
                       contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(12),
-                        borderSide: contextOverLimit
-                            ? BorderSide(color: Colors.red.shade400)
-                            : BorderSide.none,
+                        borderSide: BorderSide.none,
                       ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: contextOverLimit
-                            ? BorderSide(color: Colors.red.shade400)
-                            : BorderSide.none,
-                      ),
-                      suffixIcon: contextController.text.isNotEmpty
-                          ? Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: Text(
-                                '$contextBytes/$maxMessageBytes',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: contextOverLimit ? Colors.red : Colors.grey.shade500,
-                                ),
-                              ),
-                            )
-                          : null,
-                      suffixIconConstraints: const BoxConstraints(minWidth: 0, minHeight: 0),
                     ),
                   ),
-                  const SizedBox(height: 12),
+                  const SizedBox(height: 16),
                   // Info cards
                   Container(
                     padding: const EdgeInsets.all(16),
@@ -291,7 +260,6 @@ class _ChatScreenState extends State<ChatScreen> {
                       Expanded(
                         child: OutlinedButton.icon(
                           onPressed: () {
-                            contextController.dispose();
                             Navigator.pop(ctx);
                             _capturePhoto(tipo);
                           },
@@ -305,9 +273,8 @@ class _ChatScreenState extends State<ChatScreen> {
                       const SizedBox(width: 16),
                       Expanded(
                         child: FilledButton.icon(
-                          onPressed: contextOverLimit ? null : () {
+                          onPressed: () {
                             final contextText = contextController.text.trim();
-                            contextController.dispose();
                             Navigator.pop(ctx);
                             _startSendingWithContext(transmission, contextText);
                           },
@@ -323,10 +290,9 @@ class _ChatScreenState extends State<ChatScreen> {
                   ),
                 ],
               ),
-              ),
             ),
-          );
-        },
+          ),
+        ),
       ),
     );
   }
@@ -355,6 +321,128 @@ class _ChatScreenState extends State<ChatScreen> {
     }
     _service.sendImage(transmission);
     _scrollToBottom();
+  }
+
+  Widget _buildDestinationBar() {
+    final nodes = _service.knownNodes;
+    String destinationLabel;
+    if (_selectedDestinationId == null) {
+      destinationLabel = 'Todos (broadcast)';
+    } else if (nodes.containsKey(_selectedDestinationId)) {
+      destinationLabel = nodes[_selectedDestinationId]!.nodeName;
+    } else {
+      destinationLabel = '!${_selectedDestinationId!.toRadixString(16).padLeft(8, '0')}';
+    }
+
+    return GestureDetector(
+      onTap: _showDestinationPicker,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.grey.shade100,
+          border: Border(
+            bottom: BorderSide(color: Colors.grey.shade300, width: 0.5),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.near_me, size: 16, color: Colors.grey.shade600),
+            const SizedBox(width: 8),
+            Text(
+              'Para: ',
+              style: TextStyle(fontSize: 13, color: Colors.grey.shade600),
+            ),
+            Expanded(
+              child: Text(
+                destinationLabel,
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            Icon(Icons.arrow_drop_down, size: 20, color: Colors.grey.shade600),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showDestinationPicker() {
+    final nodes = _service.knownNodes;
+    final nodeList = nodes.values.toList();
+
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.shade300,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Enviar a',
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 16),
+              // Broadcast option
+              ListTile(
+                leading: const Icon(Icons.cell_tower),
+                title: const Text('Todos (broadcast)'),
+                subtitle: const Text('Mensaje a todos los nodos'),
+                selected: _selectedDestinationId == null,
+                selectedTileColor: Colors.green.shade50,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                onTap: () {
+                  setState(() => _selectedDestinationId = null);
+                  Navigator.pop(ctx);
+                },
+              ),
+              const Divider(),
+              // Known nodes
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  maxHeight: MediaQuery.of(ctx).size.height * 0.35,
+                ),
+                child: ListView.builder(
+                  shrinkWrap: true,
+                  itemCount: nodeList.length,
+                  itemBuilder: (context, index) {
+                    final node = nodeList[index];
+                    return ListTile(
+                      leading: Icon(
+                        Icons.router,
+                        color: node.isOnline ? Colors.green.shade600 : Colors.grey,
+                      ),
+                      title: Text(node.nodeName),
+                      subtitle: Text(node.nodeIdHex),
+                      selected: _selectedDestinationId == node.nodeId,
+                      selectedTileColor: Colors.green.shade50,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      onTap: () {
+                        setState(() => _selectedDestinationId = node.nodeId);
+                        Navigator.pop(ctx);
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -667,112 +755,6 @@ class _ChatScreenState extends State<ChatScreen> {
 
   String _formatTime(DateTime dt) {
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-  }
-
-  String get _destinationLabel {
-    if (_selectedDestinationId == null) return 'Todos (broadcast)';
-    final node = _service.knownNodes[_selectedDestinationId];
-    if (node != null) return node.nodeName;
-    return '!${_selectedDestinationId!.toRadixString(16).padLeft(8, '0')}';
-  }
-
-  void _showDestinationPicker() {
-    final nodes = _service.knownNodes.values.toList();
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 40,
-                height: 4,
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade300,
-                  borderRadius: BorderRadius.circular(2),
-                ),
-              ),
-              const SizedBox(height: 12),
-              const Text(
-                'Enviar a',
-                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 12),
-              ListTile(
-                leading: const Icon(Icons.groups),
-                title: const Text('Todos (broadcast)'),
-                selected: _selectedDestinationId == null,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                onTap: () {
-                  setState(() => _selectedDestinationId = null);
-                  Navigator.pop(ctx);
-                },
-              ),
-              const Divider(),
-              ...nodes.map((node) => ListTile(
-                leading: const Icon(Icons.person),
-                title: Text(node.nodeName),
-                subtitle: Text(node.nodeIdHex, style: const TextStyle(fontSize: 11)),
-                selected: _selectedDestinationId == node.nodeId,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                onTap: () {
-                  setState(() => _selectedDestinationId = node.nodeId);
-                  Navigator.pop(ctx);
-                },
-              )),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildDestinationBar() {
-    return GestureDetector(
-      onTap: _showDestinationPicker,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-        decoration: BoxDecoration(
-          color: _selectedDestinationId == null
-              ? Colors.grey.shade100
-              : Colors.blue.shade50,
-          border: Border(
-            bottom: BorderSide(color: Colors.grey.shade200),
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              _selectedDestinationId == null ? Icons.groups : Icons.person,
-              size: 16,
-              color: _selectedDestinationId == null
-                  ? Colors.grey.shade600
-                  : Colors.blue.shade700,
-            ),
-            const SizedBox(width: 6),
-            Text(
-              'Para: $_destinationLabel',
-              style: TextStyle(
-                fontSize: 13,
-                color: _selectedDestinationId == null
-                    ? Colors.grey.shade600
-                    : Colors.blue.shade700,
-                fontWeight: _selectedDestinationId == null
-                    ? FontWeight.normal
-                    : FontWeight.w600,
-              ),
-            ),
-            const Spacer(),
-            Icon(Icons.arrow_drop_down, size: 20, color: Colors.grey.shade500),
-          ],
-        ),
-      ),
-    );
   }
 
   Widget _buildInputArea(bool isOverLimit) {

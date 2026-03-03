@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:meshtastic_flutter/meshtastic_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -95,17 +94,6 @@ class MeshtasticService extends ChangeNotifier {
   int? _savedGatewayNodeId;
   int? get savedGatewayNodeId => _savedGatewayNodeId;
 
-  /// Safe notifyListeners that avoids calling during widget build phase
-  void _safeNotify() {
-    if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        notifyListeners();
-      });
-    } else {
-      notifyListeners();
-    }
-  }
-
   // Photo quality: false = fast (160x120), true = detailed (200x200)
   bool _detailedQuality = false;
   bool get detailedQuality => _detailedQuality;
@@ -113,7 +101,7 @@ class MeshtasticService extends ChangeNotifier {
   void _updateStatus(ConnectionStatus newStatus, String message) {
     _status = newStatus;
     _statusMessage = message;
-    _safeNotify();
+    notifyListeners();
   }
 
   // --- Persistence ---
@@ -150,21 +138,21 @@ class MeshtasticService extends ChangeNotifier {
       _savedGatewayNodeId = 0x9ea29bc4;
     }
     _detailedQuality = prefs.getBool(_photoQualityKey) ?? false;
-    _safeNotify();
+    notifyListeners();
   }
 
   Future<void> saveGatewayNodeId(int nodeId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_gatewayNodeIdKey, nodeId);
     _savedGatewayNodeId = nodeId;
-    _safeNotify();
+    notifyListeners();
   }
 
   Future<void> setDetailedQuality(bool detailed) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_photoQualityKey, detailed);
     _detailedQuality = detailed;
-    _safeNotify();
+    notifyListeners();
   }
 
   // --- Connection ---
@@ -410,7 +398,7 @@ class MeshtasticService extends ChangeNotifier {
     }
     _messageController.add(message);
     _saveMessageHistory();
-    _safeNotify();
+    notifyListeners();
   }
 
   void _addSystemMessage(String text) {
@@ -430,34 +418,27 @@ class MeshtasticService extends ChangeNotifier {
       final packetId = packet.id as int? ?? 0;
 
       // Deduplication
-      if (packetId != 0 && _processedPacketIds.contains(packetId)) {
-        debugPrint('[PKT] Duplicado id=$packetId, ignorando');
-        return;
-      }
+      if (packetId != 0 && _processedPacketIds.contains(packetId)) return;
       _processedPacketIds.add(packetId);
       if (_processedPacketIds.length > 100) {
         _processedPacketIds.remove(_processedPacketIds.first);
       }
 
       final fromNodeId = packet.from as int? ?? 0;
-      final fromHex = fromNodeId.toRadixString(16);
 
       // Skip own messages
-      if (fromNodeId == myNodeId && myNodeId != 0) {
-        debugPrint('[PKT] Propio id=$packetId from=$fromHex, ignorando');
-        return;
-      }
+      if (fromNodeId == myNodeId && myNodeId != 0) return;
 
       // Update known nodes
       if (packet.isNodeInfo == true) {
-        debugPrint('[PKT] NodeInfo from=$fromHex');
         _updateKnownNode(fromNodeId, null);
         return;
       }
 
-      final isText = packet.isTextMessage == true;
+      // Skip non-text
+      if (packet.isTextMessage != true) return;
 
-      // Try to extract text even if isTextMessage is false (fallback for encrypted/unknown packets)
+      // Extract text
       String? text;
       try {
         final payload = packet.decoded?.payload;
@@ -466,23 +447,7 @@ class MeshtasticService extends ChangeNotifier {
         }
       } catch (_) {}
       text ??= packet.textMessage as String?;
-
-      if (!isText && text == null) {
-        debugPrint('[PKT] No-texto id=$packetId from=$fromHex portnum=${packet.decoded?.portnum}');
-        return;
-      }
-
-      // Fallback: we got text from payload even though isTextMessage was false
-      if (!isText && text != null && text.isNotEmpty) {
-        debugPrint('[PKT] Fallback decode id=$packetId from=$fromHex isText=false pero payload tiene texto: ${text.length} chars');
-      }
-
-      if (text == null || text.isEmpty) {
-        debugPrint('[PKT] Texto vacio id=$packetId from=$fromHex');
-        return;
-      }
-
-      debugPrint('[PKT] Texto id=$packetId from=$fromHex len=${text.length} prefix=${text.substring(0, text.length > 20 ? 20 : text.length)}');
+      if (text == null || text.isEmpty) return;
 
       final nodeName = _getNodeName(fromNodeId);
 
@@ -508,8 +473,8 @@ class MeshtasticService extends ChangeNotifier {
         );
         _addMessage(message);
       }
-    } catch (e, st) {
-      debugPrint('Error handling packet: $e\n$st');
+    } catch (e) {
+      debugPrint('Error handling packet: $e');
     }
   }
 
@@ -541,7 +506,7 @@ class MeshtasticService extends ChangeNotifier {
         nodeName: nodeName ?? '!${nodeId.toRadixString(16).padLeft(8, '0')}',
       );
     }
-    _safeNotify();
+    notifyListeners();
   }
 
   // --- Image Protocol Handlers ---
@@ -554,7 +519,7 @@ class MeshtasticService extends ChangeNotifier {
     if (_activeTransmission == null || _activeTransmission!.imageId != imageId) return;
 
     _activeTransmission!.chunksConfirmed++;
-    _safeNotify();
+    notifyListeners();
   }
 
   void _handleImageRetry(String text) {
@@ -568,7 +533,7 @@ class MeshtasticService extends ChangeNotifier {
     _activeTransmission!.missingChunks = missing;
     _activeTransmission!.state = ImageTransmissionState.retransmitting;
     _activeTransmission!.retryRound++;
-    _safeNotify();
+    notifyListeners();
 
     if (_activeTransmission!.retryRound <= 4) {
       _retransmitChunks();
@@ -576,7 +541,7 @@ class MeshtasticService extends ChangeNotifier {
       _activeTransmission!.state = ImageTransmissionState.error;
       _activeTransmission!.errorMessage = 'Maximo de reintentos alcanzado';
       _addImageErrorMessage('No se pudo enviar la foto despues de 4 reintentos');
-      _safeNotify();
+      notifyListeners();
     }
   }
 
@@ -590,7 +555,7 @@ class MeshtasticService extends ChangeNotifier {
     _activeTransmission!.state = ImageTransmissionState.waitingResult;
     _cancelImageTimeout();
     _startResultTimeout();
-    _safeNotify();
+    notifyListeners();
 
     _addMessage(ChatMessage(
       id: 'img_ok_${DateTime.now().millisecondsSinceEpoch}',
@@ -628,10 +593,9 @@ class MeshtasticService extends ChangeNotifier {
 
       // Check if all parts received
       final receivedCount = _activeTransmission!.resultParts.where((p) => p.isNotEmpty).length;
-      debugPrint('[IMG] Result part $partIndex/$totalParts received ($receivedCount/$totalParts total)');
 
       if (receivedCount >= totalParts) {
-        // All parts received - complete!
+        // All parts received
         _resultRetryTimer?.cancel();
         _resultRetryCount = 0;
 
@@ -664,14 +628,12 @@ class MeshtasticService extends ChangeNotifier {
         _startResultRetryTimer(imageId, totalParts);
       }
 
-      _safeNotify();
+      notifyListeners();
     }
   }
 
   void _startResultRetryTimer(String imageId, int totalParts) {
     _resultRetryTimer?.cancel();
-    // Wait 25 seconds for more parts before requesting missing ones
-    // (generous for multi-hop mesh)
     _resultRetryTimer = Timer(const Duration(seconds: 25), () {
       _requestMissingResults(imageId, totalParts);
     });
@@ -682,7 +644,6 @@ class MeshtasticService extends ChangeNotifier {
 
     _resultRetryCount++;
     if (_resultRetryCount > 4) {
-      // Max retries reached - show partial result if we have anything
       final partialResult = _activeTransmission!.resultParts.join('');
       if (partialResult.trim().isNotEmpty) {
         _activeTransmission!.resultText = partialResult;
@@ -698,12 +659,11 @@ class MeshtasticService extends ChangeNotifier {
           imageId: imageId,
         ));
         Vibration.vibrate(duration: 500);
-        _safeNotify();
+        notifyListeners();
       }
       return;
     }
 
-    // Find missing parts (1-based indices)
     final missing = <int>[];
     for (int i = 1; i <= totalParts; i++) {
       if (i >= _activeTransmission!.resultParts.length ||
@@ -718,7 +678,6 @@ class MeshtasticService extends ChangeNotifier {
     debugPrint('[IMG] Requesting missing result parts: $missingStr (attempt $_resultRetryCount/4)');
     _sendResultAck(imageId, missingStr);
 
-    // Reset timer for next round
     _startResultRetryTimer(imageId, totalParts);
   }
 
@@ -736,7 +695,6 @@ class MeshtasticService extends ChangeNotifier {
     final imageId = parts[1];
     final errorMsg = parts.sublist(2).join('|');
 
-    // Ignorar errores si el resultado ya se recibio (IMG_END rezagado)
     if (_activeTransmission != null && _activeTransmission!.imageId == imageId) {
       if (_activeTransmission!.state == ImageTransmissionState.completed) {
         debugPrint('[IMG] Ignorando error tardio para imagen completada: $imageId');
@@ -746,9 +704,8 @@ class MeshtasticService extends ChangeNotifier {
       _activeTransmission!.errorMessage = errorMsg;
       _cancelImageTimeout();
       _resultRetryTimer?.cancel();
-      _safeNotify();
+      notifyListeners();
     } else {
-      // Error para imagen que no es la activa - ignorar
       debugPrint('[IMG] Ignorando error para imagen no activa: $imageId');
       return;
     }
@@ -776,7 +733,7 @@ class MeshtasticService extends ChangeNotifier {
     _activeTransmission!.state = ImageTransmissionState.sending;
     _resultRetryTimer?.cancel();
     _resultRetryCount = 0;
-    _safeNotify();
+    notifyListeners();
 
     final gatewayId = _savedGatewayNodeId!;
 
@@ -794,7 +751,7 @@ class MeshtasticService extends ChangeNotifier {
       final chunkMsg = 'IMG|${transmission.imageId}|$i|${transmission.chunks[i]}';
       await sendDirectMessage(chunkMsg, gatewayId);
       _activeTransmission!.chunksSent = i + 1;
-      _safeNotify();
+      notifyListeners();
 
       // Update progress message
       _updateImageProgressInChat();
@@ -807,7 +764,7 @@ class MeshtasticService extends ChangeNotifier {
     await sendDirectMessage(endMsg, gatewayId);
 
     _activeTransmission!.state = ImageTransmissionState.waitingAck;
-    _safeNotify();
+    notifyListeners();
 
     // Timeout: 60s without IMG_OK -> resend IMG_END
     _startAckTimeout();
@@ -832,7 +789,7 @@ class MeshtasticService extends ChangeNotifier {
     final endMsg = 'IMG_END|${_activeTransmission!.imageId}|${_activeTransmission!.chunks.length}|${_activeTransmission!.checksum}';
     await sendDirectMessage(endMsg, gatewayId);
     _activeTransmission!.state = ImageTransmissionState.waitingAck;
-    _safeNotify();
+    notifyListeners();
   }
 
   void cancelImageTransmission() {
@@ -841,7 +798,7 @@ class MeshtasticService extends ChangeNotifier {
       _cancelImageTimeout();
       _resultRetryTimer?.cancel();
       _resultRetryCount = 0;
-      _safeNotify();
+      notifyListeners();
       _addSystemMessage('Envio de foto cancelado');
     }
   }
@@ -865,7 +822,7 @@ class MeshtasticService extends ChangeNotifier {
               _activeTransmission!.state == ImageTransmissionState.waitingAck) {
             _activeTransmission!.state = ImageTransmissionState.error;
             _activeTransmission!.errorMessage = 'Sin respuesta del gateway';
-            _safeNotify();
+            notifyListeners();
             _addImageErrorMessage('No se recibio confirmacion del gateway');
           }
         });
@@ -875,31 +832,13 @@ class MeshtasticService extends ChangeNotifier {
 
   void _startResultTimeout() {
     _cancelImageTimeout();
-    // 240s total: allows Claude analysis (~15s) + result delivery with retries
     _imageTimeoutTimer = Timer(const Duration(seconds: 240), () {
       if (_activeTransmission != null &&
           _activeTransmission!.state == ImageTransmissionState.waitingResult) {
-        // Before giving up, show partial result if available
-        final partialResult = _activeTransmission!.resultParts.join('');
-        if (partialResult.trim().isNotEmpty) {
-          _activeTransmission!.resultText = partialResult;
-          _activeTransmission!.state = ImageTransmissionState.completed;
-          _addMessage(ChatMessage(
-            id: 'img_result_${DateTime.now().millisecondsSinceEpoch}',
-            messageText: '$partialResult\n\n[Resultado parcial - tiempo agotado]',
-            fromNodeId: _savedGatewayNodeId ?? 0,
-            fromNodeName: 'AgroCam IA',
-            type: ChatMessageType.imageResult,
-            imageId: _activeTransmission!.imageId,
-          ));
-        } else {
-          _activeTransmission!.state = ImageTransmissionState.error;
-          _activeTransmission!.errorMessage = 'Tiempo de espera agotado';
-          _addImageErrorMessage('No se recibio el diagnostico (tiempo agotado)');
-        }
-        _resultRetryTimer?.cancel();
-        _resultRetryCount = 0;
-        _safeNotify();
+        _activeTransmission!.state = ImageTransmissionState.error;
+        _activeTransmission!.errorMessage = 'Tiempo de espera agotado';
+        notifyListeners();
+        _addImageErrorMessage('No se recibio el diagnostico (tiempo agotado)');
       }
     });
   }
@@ -931,7 +870,7 @@ class MeshtasticService extends ChangeNotifier {
           ));
         } catch (_) {}
       }
-      _safeNotify();
+      notifyListeners();
     } catch (_) {}
   }
 
