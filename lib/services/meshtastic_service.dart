@@ -724,11 +724,21 @@ class MeshtasticService extends ChangeNotifier {
     final imageId = parts[1];
     final errorMsg = parts.sublist(2).join('|');
 
+    // Ignorar errores si el resultado ya se recibio (IMG_END rezagado)
     if (_activeTransmission != null && _activeTransmission!.imageId == imageId) {
+      if (_activeTransmission!.state == ImageTransmissionState.completed) {
+        debugPrint('[IMG] Ignorando error tardio para imagen completada: $imageId');
+        return;
+      }
       _activeTransmission!.state = ImageTransmissionState.error;
       _activeTransmission!.errorMessage = errorMsg;
       _cancelImageTimeout();
+      _resultRetryTimer?.cancel();
       notifyListeners();
+    } else {
+      // Error para imagen que no es la activa - ignorar
+      debugPrint('[IMG] Ignorando error para imagen no activa: $imageId');
+      return;
     }
 
     _addImageErrorMessage(errorMsg);
