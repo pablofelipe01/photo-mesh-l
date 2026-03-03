@@ -99,10 +99,10 @@ class MeshtasticService extends ChangeNotifier {
   void _safeNotify() {
     if (SchedulerBinding.instance.schedulerPhase == SchedulerPhase.persistentCallbacks) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        _safeNotify();
+        notifyListeners();
       });
     } else {
-      _safeNotify();
+      notifyListeners();
     }
   }
 
