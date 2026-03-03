@@ -449,16 +449,16 @@ class MeshtasticService extends ChangeNotifier {
 
       final nodeName = _getNodeName(fromNodeId);
 
-      // Route by prefix
-      if (text.startsWith('IMG_ACK:')) {
+      // Route by prefix (gateway uses | delimiter)
+      if (text.startsWith('IMG_ACK|')) {
         _handleImageAck(text);
-      } else if (text.startsWith('IMG_RETRY:')) {
+      } else if (text.startsWith('IMG_RETRY|')) {
         _handleImageRetry(text);
-      } else if (text.startsWith('IMG_OK:')) {
+      } else if (text.startsWith('IMG_OK|')) {
         _handleImageOk(text);
-      } else if (text.startsWith('IMG_RESULT:')) {
+      } else if (text.startsWith('IMG_RESULT|')) {
         _handleImageResult(text);
-      } else if (text.startsWith('IMG_ERROR:')) {
+      } else if (text.startsWith('IMG_ERROR|')) {
         _handleImageError(text);
       } else {
         // Normal chat message
@@ -510,8 +510,8 @@ class MeshtasticService extends ChangeNotifier {
   // --- Image Protocol Handlers ---
 
   void _handleImageAck(String text) {
-    // IMG_ACK:<imageId>:<chunkIndex>
-    final parts = text.split(':');
+    // IMG_ACK|<imageId>|<chunkIndex>
+    final parts = text.split('|');
     if (parts.length < 3) return;
     final imageId = parts[1];
     if (_activeTransmission == null || _activeTransmission!.imageId != imageId) return;
@@ -521,8 +521,8 @@ class MeshtasticService extends ChangeNotifier {
   }
 
   void _handleImageRetry(String text) {
-    // IMG_RETRY:<imageId>:<chunk1>,<chunk2>,...
-    final parts = text.split(':');
+    // IMG_RETRY|<imageId>|<chunk1>,<chunk2>,...
+    final parts = text.split('|');
     if (parts.length < 3) return;
     final imageId = parts[1];
     if (_activeTransmission == null || _activeTransmission!.imageId != imageId) return;
@@ -544,8 +544,8 @@ class MeshtasticService extends ChangeNotifier {
   }
 
   void _handleImageOk(String text) {
-    // IMG_OK:<imageId>
-    final parts = text.split(':');
+    // IMG_OK|<imageId>
+    final parts = text.split('|');
     if (parts.length < 2) return;
     final imageId = parts[1];
     if (_activeTransmission == null || _activeTransmission!.imageId != imageId) return;
@@ -565,16 +565,16 @@ class MeshtasticService extends ChangeNotifier {
   }
 
   void _handleImageResult(String text) {
-    // IMG_RESULT:<imageId>:<partIndex>/<totalParts>:<text>
-    final firstColon = text.indexOf(':');
-    final secondColon = text.indexOf(':', firstColon + 1);
-    final thirdColon = text.indexOf(':', secondColon + 1);
+    // IMG_RESULT|<imageId>|<partIndex>/<totalParts>|<text>
+    final firstPipe = text.indexOf('|');
+    final secondPipe = text.indexOf('|', firstPipe + 1);
+    final thirdPipe = text.indexOf('|', secondPipe + 1);
 
-    if (thirdColon < 0) return;
+    if (thirdPipe < 0) return;
 
-    final imageId = text.substring(firstColon + 1, secondColon);
-    final partInfo = text.substring(secondColon + 1, thirdColon);
-    final resultText = text.substring(thirdColon + 1);
+    final imageId = text.substring(firstPipe + 1, secondPipe);
+    final partInfo = text.substring(secondPipe + 1, thirdPipe);
+    final resultText = text.substring(thirdPipe + 1);
 
     final partParts = partInfo.split('/');
     final partIndex = int.tryParse(partParts[0]) ?? 0;
@@ -621,11 +621,11 @@ class MeshtasticService extends ChangeNotifier {
   }
 
   void _handleImageError(String text) {
-    // IMG_ERROR:<imageId>:<errorMessage>
-    final parts = text.split(':');
+    // IMG_ERROR|<imageId>|<errorMessage>
+    final parts = text.split('|');
     if (parts.length < 3) return;
     final imageId = parts[1];
-    final errorMsg = parts.sublist(2).join(':');
+    final errorMsg = parts.sublist(2).join('|');
 
     if (_activeTransmission != null && _activeTransmission!.imageId == imageId) {
       _activeTransmission!.state = ImageTransmissionState.error;
@@ -660,7 +660,7 @@ class MeshtasticService extends ChangeNotifier {
     final gatewayId = _savedGatewayNodeId!;
 
     // Send IMG_START
-    final startMsg = 'IMG_START:${transmission.imageId}:${transmission.tipo}:${transmission.chunks.length}:${transmission.checksum}';
+    final startMsg = 'IMG_START|${transmission.imageId}|${transmission.tipo}|${transmission.chunks.length}|${transmission.checksum}';
     await sendDirectMessage(startMsg, gatewayId);
     await Future.delayed(const Duration(milliseconds: 2500));
 
@@ -670,7 +670,7 @@ class MeshtasticService extends ChangeNotifier {
         return;
       }
 
-      final chunkMsg = 'IMG_DATA:${transmission.imageId}:$i:${transmission.chunks[i]}';
+      final chunkMsg = 'IMG|${transmission.imageId}|$i|${transmission.chunks[i]}';
       await sendDirectMessage(chunkMsg, gatewayId);
       _activeTransmission!.chunksSent = i + 1;
       notifyListeners();
@@ -682,7 +682,7 @@ class MeshtasticService extends ChangeNotifier {
     }
 
     // Send IMG_END
-    final endMsg = 'IMG_END:${transmission.imageId}:${transmission.chunks.length}:${transmission.checksum}';
+    final endMsg = 'IMG_END|${transmission.imageId}|${transmission.chunks.length}|${transmission.checksum}';
     await sendDirectMessage(endMsg, gatewayId);
 
     _activeTransmission!.state = ImageTransmissionState.waitingAck;
@@ -701,14 +701,14 @@ class MeshtasticService extends ChangeNotifier {
         return;
       }
       if (chunkIdx < _activeTransmission!.chunks.length) {
-        final chunkMsg = 'IMG_DATA:${_activeTransmission!.imageId}:$chunkIdx:${_activeTransmission!.chunks[chunkIdx]}';
+        final chunkMsg = 'IMG|${_activeTransmission!.imageId}|$chunkIdx|${_activeTransmission!.chunks[chunkIdx]}';
         await sendDirectMessage(chunkMsg, gatewayId);
         await Future.delayed(const Duration(milliseconds: 2500));
       }
     }
 
     // Re-send IMG_END
-    final endMsg = 'IMG_END:${_activeTransmission!.imageId}:${_activeTransmission!.chunks.length}:${_activeTransmission!.checksum}';
+    final endMsg = 'IMG_END|${_activeTransmission!.imageId}|${_activeTransmission!.chunks.length}|${_activeTransmission!.checksum}';
     await sendDirectMessage(endMsg, gatewayId);
     _activeTransmission!.state = ImageTransmissionState.waitingAck;
     notifyListeners();
@@ -733,7 +733,7 @@ class MeshtasticService extends ChangeNotifier {
       if (_activeTransmission != null &&
           _activeTransmission!.state == ImageTransmissionState.waitingAck) {
         // Resend IMG_END
-        final endMsg = 'IMG_END:${_activeTransmission!.imageId}:${_activeTransmission!.chunks.length}:${_activeTransmission!.checksum}';
+        final endMsg = 'IMG_END|${_activeTransmission!.imageId}|${_activeTransmission!.chunks.length}|${_activeTransmission!.checksum}';
         sendDirectMessage(endMsg, _savedGatewayNodeId!);
 
         // After another 60s, give up
