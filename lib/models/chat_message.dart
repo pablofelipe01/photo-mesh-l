@@ -4,6 +4,8 @@ enum ChatMessageType {
   imageResult,
   imageError,
   system,
+  sessionResult,
+  sessionEnd,
 }
 
 class ChatMessage {
@@ -15,6 +17,7 @@ class ChatMessage {
   final bool isMine;
   final ChatMessageType type;
   final String? imageId;
+  final String? sessionId;
   ImageTransmissionState? imageState;
   double? imageProgress;
 
@@ -27,6 +30,7 @@ class ChatMessage {
     this.isMine = false,
     this.type = ChatMessageType.text,
     this.imageId,
+    this.sessionId,
     this.imageState,
     this.imageProgress,
   }) : timestamp = timestamp ?? DateTime.now();

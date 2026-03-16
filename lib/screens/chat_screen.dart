@@ -4,10 +4,13 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../models/agro_context.dart';
 import '../models/chat_message.dart';
 import '../models/image_transmission.dart';
+import '../models/session.dart';
 import '../services/image_service.dart';
 import '../services/meshtastic_service.dart';
+import '../widgets/context_form.dart';
 import '../widgets/transmission_progress.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -24,9 +27,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   final _imagePicker = ImagePicker();
   StreamSubscription<ChatMessage>? _messageSubscription;
+  StreamSubscription<Map<String, String>>? _sessionSubscription;
   int _currentByteCount = 0;
   bool _isSending = false;
   int? _selectedDestinationId;
+  ConsultaSession? _activeSession;
 
   MeshtasticService get _service => widget.service;
 
@@ -37,6 +42,17 @@ class _ChatScreenState extends State<ChatScreen> {
     _messageSubscription = _service.messageStream.listen((_) {
       _scrollToBottom();
     });
+    _sessionSubscription = _service.sessionStream.listen((event) {
+      if (event['event'] == 'ended') {
+        final sesId = event['sessionId'];
+        if (_activeSession != null && _activeSession!.sessionId == sesId) {
+          setState(() {
+            _activeSession?.isActive = false;
+            _activeSession = null;
+          });
+        }
+      }
+    });
     _textController.addListener(_onTextChanged);
   }
 
@@ -44,6 +60,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void dispose() {
     _service.removeListener(_onServiceChanged);
     _messageSubscription?.cancel();
+    _sessionSubscription?.cancel();
     _textController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -142,7 +159,7 @@ class _ChatScreenState extends State<ChatScreen> {
 
       if (!mounted) return;
 
-      _showPreviewSheet(imageBytes, tipo);
+      _showContextForm(imageBytes, tipo);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -152,20 +169,12 @@ class _ChatScreenState extends State<ChatScreen> {
     }
   }
 
-  void _showPreviewSheet(dynamic imageBytes, String tipo) {
+  void _showContextForm(dynamic imageBytes, String tipo) {
     final transmission = ImageService.prepareTransmission(
       imageBytes,
       tipo,
       detailed: _service.detailedQuality,
     );
-
-    final sizeKb = (transmission.compressedImage!.length / 1024).toStringAsFixed(1);
-    final estimatedTime = ImageService.estimateTime(transmission.chunks.length);
-    final minutes = (estimatedTime / 60).floor();
-    final seconds = (estimatedTime % 60).ceil();
-    final timeStr = minutes > 0 ? '${minutes}m ${seconds}s' : '${seconds}s';
-
-    final contextController = TextEditingController();
 
     showModalBottomSheet(
       context: context,
@@ -173,154 +182,84 @@ class _ChatScreenState extends State<ChatScreen> {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setSheetState) => SafeArea(
-          child: Padding(
-            padding: EdgeInsets.fromLTRB(24, 24, 24, 24 + MediaQuery.of(ctx).viewInsets.bottom),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 40,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade300,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    'Enviar foto - $tipo',
-                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 16),
-                  // Context text field
-                  TextField(
-                    controller: contextController,
-                    maxLines: 2,
-                    minLines: 1,
-                    decoration: InputDecoration(
-                      hintText: 'Contexto adicional (opcional)',
-                      filled: true,
-                      fillColor: Colors.grey.shade100,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide.none,
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  // Info cards
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.grey.shade100,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      children: [
-                        _infoRow(Icons.straighten, 'Tamano comprimido', '$sizeKb KB'),
-                        const Divider(),
-                        _infoRow(Icons.message, 'Mensajes a enviar', '${transmission.chunks.length}'),
-                        const Divider(),
-                        _infoRow(Icons.timer, 'Tiempo estimado', '~$timeStr'),
-                        const Divider(),
-                        _infoRow(Icons.high_quality,
-                            'Calidad',
-                            _service.detailedQuality ? 'Detallada (200x200)' : 'Rapida (160x120)'),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.orange.shade50,
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: Colors.orange.shade200),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.warning_amber, color: Colors.orange.shade700, size: 20),
-                        const SizedBox(width: 8),
-                        const Expanded(
-                          child: Text(
-                            'No minimices la app durante el envio',
-                            style: TextStyle(fontSize: 13),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton.icon(
-                          onPressed: () {
-                            Navigator.pop(ctx);
-                            _capturePhoto(tipo);
-                          },
-                          icon: const Icon(Icons.refresh),
-                          label: const Text('REPETIR'),
-                          style: OutlinedButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: FilledButton.icon(
-                          onPressed: () {
-                            final contextText = contextController.text.trim();
-                            Navigator.pop(ctx);
-                            _startSendingWithContext(transmission, contextText);
-                          },
-                          icon: const Icon(Icons.send),
-                          label: const Text('ENVIAR'),
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 14),
-                            backgroundColor: Colors.green.shade600,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.85,
+        minChildSize: 0.5,
+        maxChildSize: 0.95,
+        expand: false,
+        builder: (ctx, scrollController) => SingleChildScrollView(
+          controller: scrollController,
+          child: ContextFormSheet(
+            transmission: transmission,
+            detailedQuality: _service.detailedQuality,
+            tipo: tipo,
+            onSend: _startSendingWithContext,
+            onRetake: _capturePhoto,
           ),
         ),
       ),
     );
   }
 
-  Widget _infoRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: Colors.grey.shade600),
-          const SizedBox(width: 8),
-          Expanded(child: Text(label, style: TextStyle(color: Colors.grey.shade700))),
-          Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
-        ],
-      ),
-    );
-  }
+  Future<void> _startSendingWithContext(ImageTransmission transmission, AgroContext agroContext) async {
+    transmission.context = agroContext;
 
-  Future<void> _startSendingWithContext(ImageTransmission transmission, String contextText) async {
-    if (contextText.isNotEmpty) {
-      await _service.sendChatMessage(
-        contextText,
-        destinationId: _service.savedGatewayNodeId,
-      );
-      await Future.delayed(const Duration(milliseconds: 1500));
-    }
+    // Send structured context message first
+    final ctxMessage = agroContext.toWireFormat();
+    await _service.sendChatMessage(
+      ctxMessage,
+      destinationId: _service.savedGatewayNodeId,
+    );
+
+    // Wait for context to arrive before sending image
+    await Future.delayed(const Duration(seconds: 2));
+
     _service.sendImage(transmission);
     _scrollToBottom();
+  }
+
+  // --- Session methods ---
+
+  void _startSession(String imageId, String sessionId) {
+    setState(() {
+      _activeSession = ConsultaSession(
+        sessionId: sessionId,
+        imageId: imageId,
+      );
+    });
+  }
+
+  Future<void> _sendSessionQuestion() async {
+    final text = _textController.text.trim();
+    if (text.isEmpty || _activeSession == null || !_activeSession!.canAskMore) return;
+
+    final session = _activeSession!;
+    setState(() => _isSending = true);
+    _textController.clear();
+
+    session.questionCount++;
+    session.messages.add(SessionMessage(text: text, isQuestion: true));
+
+    final msg = 'SES_${session.sessionId}|$text';
+    await _service.sendChatMessage(msg, destinationId: _service.savedGatewayNodeId);
+
+    setState(() => _isSending = false);
+    _scrollToBottom();
+  }
+
+  Future<void> _endSession() async {
+    if (_activeSession == null) return;
+    final sesId = _activeSession!.sessionId;
+
+    await _service.sendChatMessage(
+      'SES_END|$sesId',
+      destinationId: _service.savedGatewayNodeId,
+    );
+
+    setState(() {
+      _activeSession?.isActive = false;
+      _activeSession = null;
+    });
   }
 
   Widget _buildDestinationBar() {
@@ -602,6 +541,12 @@ class _ChatScreenState extends State<ChatScreen> {
     if (msg.type == ChatMessageType.imageResult) {
       return _buildImageResultMessage(msg);
     }
+    if (msg.type == ChatMessageType.sessionResult) {
+      return _buildSessionResultMessage(msg);
+    }
+    if (msg.type == ChatMessageType.sessionEnd) {
+      return _buildSystemMessage(msg);
+    }
     if (msg.type == ChatMessageType.imageError) {
       return _buildImageErrorMessage(msg);
     }
@@ -710,6 +655,82 @@ class _ChatScreenState extends State<ChatScreen> {
                   const SizedBox(height: 8),
                   Text(msg.messageText, style: const TextStyle(fontSize: 15)),
                   const SizedBox(height: 4),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      if (msg.sessionId != null && _activeSession == null)
+                        TextButton.icon(
+                          onPressed: () => _startSession(msg.imageId ?? '', msg.sessionId!),
+                          icon: Icon(Icons.question_answer, size: 16, color: Colors.green.shade700),
+                          label: Text(
+                            'Consultar mas',
+                            style: TextStyle(fontSize: 12, color: Colors.green.shade700),
+                          ),
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        )
+                      else
+                        const SizedBox(),
+                      Text(
+                        _formatTime(msg.timestamp),
+                        style: TextStyle(fontSize: 10, color: Colors.grey.shade600),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSessionResultMessage(ChatMessage msg) {
+    return Align(
+      alignment: Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(left: 8, right: 48, top: 2, bottom: 2),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 4, bottom: 2),
+              child: Text(
+                msg.fromNodeName,
+                style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+              ),
+            ),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.blue.shade300),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.question_answer, color: Colors.blue.shade700, size: 20),
+                      const SizedBox(width: 8),
+                      Text(
+                        'Consulta',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.blue.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Text(msg.messageText, style: const TextStyle(fontSize: 15)),
+                  const SizedBox(height: 4),
                   Align(
                     alignment: Alignment.bottomRight,
                     child: Text(
@@ -757,7 +778,47 @@ class _ChatScreenState extends State<ChatScreen> {
     return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
+  Widget _buildSessionBar() {
+    if (_activeSession == null) return const SizedBox.shrink();
+    final session = _activeSession!;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        border: Border(
+          bottom: BorderSide(color: Colors.blue.shade200, width: 0.5),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.question_answer, size: 16, color: Colors.blue.shade700),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Sesion activa — Pregunta ${session.questionCount}/${ConsultaSession.maxQuestions}',
+              style: TextStyle(fontSize: 13, color: Colors.blue.shade700, fontWeight: FontWeight.w500),
+            ),
+          ),
+          GestureDetector(
+            onTap: _endSession,
+            child: Text(
+              'Terminar',
+              style: TextStyle(
+                fontSize: 13,
+                color: Colors.red.shade600,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildInputArea(bool isOverLimit) {
+    final inSession = _activeSession != null;
+
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -769,18 +830,18 @@ class _ChatScreenState extends State<ChatScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _buildDestinationBar(),
+            if (inSession) _buildSessionBar() else _buildDestinationBar(),
             Padding(
               padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
               child: Row(
                 children: [
-                  // Camera button
+                  // Camera button (disabled during session)
                   Material(
-                    color: Colors.green.shade600,
+                    color: inSession ? Colors.grey.shade400 : Colors.green.shade600,
                     shape: const CircleBorder(),
                     child: InkWell(
                       customBorder: const CircleBorder(),
-                      onTap: _onCameraPressed,
+                      onTap: inSession ? null : _onCameraPressed,
                       child: const Padding(
                         padding: EdgeInsets.all(10),
                         child: Icon(Icons.camera_alt, color: Colors.white, size: 24),
@@ -795,9 +856,9 @@ class _ChatScreenState extends State<ChatScreen> {
                       maxLines: 3,
                       minLines: 1,
                       textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _sendMessage(),
+                      onSubmitted: (_) => inSession ? _sendSessionQuestion() : _sendMessage(),
                       decoration: InputDecoration(
-                        hintText: 'Escribe un mensaje...',
+                        hintText: inSession ? 'Escribe tu pregunta...' : 'Escribe un mensaje...',
                         filled: true,
                         fillColor: isOverLimit ? Colors.red.shade50 : Colors.grey.shade100,
                         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -820,12 +881,12 @@ class _ChatScreenState extends State<ChatScreen> {
                   // Send button
                   Material(
                     color: _service.isConnected && _textController.text.trim().isNotEmpty && !isOverLimit
-                        ? Colors.green.shade600
+                        ? (inSession ? Colors.blue.shade600 : Colors.green.shade600)
                         : Colors.grey.shade400,
                     shape: const CircleBorder(),
                     child: InkWell(
                       customBorder: const CircleBorder(),
-                      onTap: _isSending ? null : _sendMessage,
+                      onTap: _isSending ? null : (inSession ? _sendSessionQuestion : _sendMessage),
                       child: Padding(
                         padding: const EdgeInsets.all(10),
                         child: _isSending

@@ -1,10 +1,12 @@
 import 'dart:typed_data';
 
+import 'agro_context.dart';
 import 'chat_message.dart';
 
 class ImageTransmission {
   final String imageId;
   final String tipo;
+  AgroContext? context;
   Uint8List? compressedImage;
   List<String> chunks;
   int checksum;
@@ -22,6 +24,7 @@ class ImageTransmission {
   ImageTransmission({
     required this.imageId,
     required this.tipo,
+    this.context,
     this.compressedImage,
     List<String>? chunks,
     this.checksum = 0,

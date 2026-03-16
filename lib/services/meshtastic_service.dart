@@ -62,9 +62,15 @@ class MeshtasticService extends ChangeNotifier {
   Timer? _resultRetryTimer;
   int _resultRetryCount = 0;
 
+  // Session state
+  final Map<String, List<String>> _sessionResultParts = {};
+  final _sessionController = StreamController<Map<String, String>>.broadcast();
+  Stream<Map<String, String>> get sessionStream => _sessionController.stream;
+
   // Preloaded nodes
   static final Map<int, MeshNode> _preloadedNodes = {
     0x9ea29bc4: MeshNode(nodeId: 0x9ea29bc4, nodeName: 'Mission Pack'),
+    0x9ea1ff28: MeshNode(nodeId: 0x9ea1ff28, nodeName: 'Mission Pack 2'),
     0x7c1a5974: MeshNode(nodeId: 0x7c1a5974, nodeName: 'Pablo A'),
     0xf515b946: MeshNode(nodeId: 0xf515b946, nodeName: 'Pablo Long'),
     0x455250c3: MeshNode(nodeId: 0x455250c3, nodeName: 'David_Inge'),
@@ -462,6 +468,12 @@ class MeshtasticService extends ChangeNotifier {
         _handleImageResult(text);
       } else if (text.startsWith('IMG_ERROR|')) {
         _handleImageError(text);
+      } else if (text.startsWith('SES_STARTED|')) {
+        _handleSessionStarted(text, fromNodeId);
+      } else if (text.startsWith('SES_RESULT|')) {
+        _handleSessionResult(text, fromNodeId);
+      } else if (text.startsWith('SES_END|')) {
+        _handleSessionEnd(text, fromNodeId);
       } else {
         // Normal chat message
         final message = ChatMessage(
@@ -517,6 +529,13 @@ class MeshtasticService extends ChangeNotifier {
     if (parts.length < 3) return;
     final imageId = parts[1];
     if (_activeTransmission == null || _activeTransmission!.imageId != imageId) return;
+    if (_activeTransmission!.state == ImageTransmissionState.completed ||
+        _activeTransmission!.state == ImageTransmissionState.waitingResult ||
+        _activeTransmission!.state == ImageTransmissionState.error ||
+        _activeTransmission!.state == ImageTransmissionState.cancelled) {
+      debugPrint('[IMG] Ignorando ACK tardio para imagen en estado ${_activeTransmission!.state}');
+      return;
+    }
 
     _activeTransmission!.chunksConfirmed++;
     notifyListeners();
@@ -528,6 +547,15 @@ class MeshtasticService extends ChangeNotifier {
     if (parts.length < 3) return;
     final imageId = parts[1];
     if (_activeTransmission == null || _activeTransmission!.imageId != imageId) return;
+
+    // Ignorar retries tardios si la imagen ya fue procesada/completada
+    if (_activeTransmission!.state == ImageTransmissionState.completed ||
+        _activeTransmission!.state == ImageTransmissionState.waitingResult ||
+        _activeTransmission!.state == ImageTransmissionState.error ||
+        _activeTransmission!.state == ImageTransmissionState.cancelled) {
+      debugPrint('[IMG] Ignorando RETRY tardio para imagen en estado ${_activeTransmission!.state}');
+      return;
+    }
 
     final missing = parts[2].split(',').map((s) => int.tryParse(s) ?? -1).where((i) => i >= 0).toList();
     _activeTransmission!.missingChunks = missing;
@@ -623,6 +651,16 @@ class MeshtasticService extends ChangeNotifier {
         ));
 
         Vibration.vibrate(duration: 500);
+
+        // Limpiar transmision activa despues de un delay para ignorar mensajes tardios
+        final completedId = imageId;
+        Future.delayed(const Duration(seconds: 30), () {
+          if (_activeTransmission != null &&
+              _activeTransmission!.imageId == completedId &&
+              _activeTransmission!.state == ImageTransmissionState.completed) {
+            _activeTransmission = null;
+          }
+        });
       } else {
         // Not all parts yet - start/reset retry timer
         _startResultRetryTimer(imageId, totalParts);
@@ -721,6 +759,112 @@ class MeshtasticService extends ChangeNotifier {
       fromNodeName: 'Sistema',
       type: ChatMessageType.imageError,
     ));
+  }
+
+  // --- Session Protocol Handlers ---
+
+  void _handleSessionStarted(String text, int fromNodeId) {
+    // SES_STARTED|sesId|imgId
+    final parts = text.split('|');
+    if (parts.length < 3) return;
+    final sessionId = parts[1];
+    final imageId = parts[2];
+
+    debugPrint('[SES] Session started: $sessionId for image $imageId');
+
+    // Notify via stream so chat_screen can offer "Consultar mas"
+    _sessionController.add({'event': 'started', 'sessionId': sessionId, 'imageId': imageId});
+
+    // Update the last imageResult message to include sessionId
+    for (int i = _messageHistory.length - 1; i >= 0; i--) {
+      final msg = _messageHistory[i];
+      if (msg.type == ChatMessageType.imageResult && msg.imageId == imageId) {
+        // Replace with new message that has sessionId
+        _messageHistory[i] = ChatMessage(
+          id: msg.id,
+          messageText: msg.messageText,
+          fromNodeId: msg.fromNodeId,
+          fromNodeName: msg.fromNodeName,
+          timestamp: msg.timestamp,
+          type: ChatMessageType.imageResult,
+          imageId: imageId,
+          sessionId: sessionId,
+        );
+        notifyListeners();
+        break;
+      }
+    }
+  }
+
+  void _handleSessionResult(String text, int fromNodeId) {
+    // SES_RESULT|sesId|part/total|texto
+    final firstPipe = text.indexOf('|');
+    final secondPipe = text.indexOf('|', firstPipe + 1);
+    final thirdPipe = text.indexOf('|', secondPipe + 1);
+
+    if (thirdPipe < 0) return;
+
+    final sessionId = text.substring(firstPipe + 1, secondPipe);
+    final partInfo = text.substring(secondPipe + 1, thirdPipe);
+    final resultText = text.substring(thirdPipe + 1);
+
+    final partParts = partInfo.split('/');
+    final partIndex = int.tryParse(partParts[0]) ?? 0;
+    final totalParts = int.tryParse(partParts.length > 1 ? partParts[1] : '1') ?? 1;
+
+    debugPrint('[SES] Result part $partIndex/$totalParts for session $sessionId');
+
+    // Initialize parts buffer
+    _sessionResultParts.putIfAbsent(sessionId, () => List.filled(totalParts + 1, ''));
+
+    final parts = _sessionResultParts[sessionId]!;
+    // Ensure enough space
+    while (parts.length <= partIndex) {
+      parts.add('');
+    }
+    parts[partIndex] = resultText;
+
+    // Check if all parts received (1-based indexing)
+    final receivedCount = parts.where((p) => p.isNotEmpty).length;
+    if (receivedCount >= totalParts) {
+      final fullResult = parts.sublist(1, totalParts + 1).join('');
+      _sessionResultParts.remove(sessionId);
+
+      _addMessage(ChatMessage(
+        id: 'ses_result_${DateTime.now().millisecondsSinceEpoch}',
+        messageText: fullResult,
+        fromNodeId: fromNodeId,
+        fromNodeName: 'AgroCam IA',
+        type: ChatMessageType.sessionResult,
+        sessionId: sessionId,
+      ));
+
+      _sessionController.add({'event': 'result', 'sessionId': sessionId, 'text': fullResult});
+      Vibration.vibrate(duration: 300);
+    }
+  }
+
+  void _handleSessionEnd(String text, int fromNodeId) {
+    // SES_END|sesId or SES_END|sesId|reason
+    final parts = text.split('|');
+    if (parts.length < 2) return;
+    final sessionId = parts[1];
+    final reason = parts.length > 2 ? parts.sublist(2).join('|') : 'Sesion terminada';
+
+    debugPrint('[SES] Session ended: $sessionId - $reason');
+
+    _sessionResultParts.remove(sessionId);
+
+    _addMessage(ChatMessage(
+      id: 'ses_end_${DateTime.now().millisecondsSinceEpoch}',
+      messageText: reason,
+      fromNodeId: 0,
+      fromNodeName: 'Sistema',
+      type: ChatMessageType.sessionEnd,
+      sessionId: sessionId,
+    ));
+
+    _sessionController.add({'event': 'ended', 'sessionId': sessionId});
   }
 
   // --- Image Sending ---
@@ -904,6 +1048,7 @@ class MeshtasticService extends ChangeNotifier {
     _packetSubscription?.cancel();
     _messageController.close();
     _imageResultController.close();
+    _sessionController.close();
     try {
       _client?.disconnect();
     } catch (_) {}
